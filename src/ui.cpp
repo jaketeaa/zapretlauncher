@@ -1027,7 +1027,7 @@ void DrawLists(AppState& s) {
 //  Вкладка "Настройки"
 // =====================================================================
 enum class SettingsIcon { Folder, Download, System, Repository };
-constexpr wchar_t kLauncherRepository[] = L"";
+constexpr wchar_t kLauncherRepository[] = L"https://github.com/jaketeaa/zapretlauncher";
 
 void SettingsHeading(SettingsIcon icon, const char* title) {
     const auto p = ImGui::GetCursorScreenPos();
