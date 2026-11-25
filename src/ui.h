@@ -89,6 +89,7 @@ void SetDpiScale(float scale);
 void SetFonts(ImFont* title, ImFont* heading, ImFont* button, ImFont* caption, ImFont* mono);
 void SetGlassRenderer(const GlassRenderer* renderer);
 void SetLauncherIcon(unsigned long long texture);
+void SetDiagnosticIcon(std::size_t index, unsigned long long texture);
 void ApplyTheme(float dpiScale);
 void Render(AppState& s, HWND mainWindow);
 

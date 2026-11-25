@@ -8,3 +8,38 @@ LICENSE_MANROPE RCDATA "@CMAKE_CURRENT_SOURCE_DIR@/assets/fonts/Manrope-OFL.txt"
 LICENSE_ROBOTO_MONO RCDATA "@CMAKE_CURRENT_SOURCE_DIR@/assets/fonts/RobotoMono-OFL.txt"
 IDI_ZAPRET_LAUNCHER ICON "@CMAKE_CURRENT_SOURCE_DIR@/assets/icons/ZapretLauncher.ico"
 PNG_ZAPRET_LAUNCHER RCDATA "@CMAKE_CURRENT_SOURCE_DIR@/assets/icons/ZapretLauncher-1024.png"
+
+PNG_DIAGNOSTIC_DISCORD RCDATA "@CMAKE_CURRENT_SOURCE_DIR@/assets/icons/diagnostics/discord.png"
+PNG_DIAGNOSTIC_YOUTUBE RCDATA "@CMAKE_CURRENT_SOURCE_DIR@/assets/icons/diagnostics/youtube.png"
+PNG_DIAGNOSTIC_CLOUDFLARE RCDATA "@CMAKE_CURRENT_SOURCE_DIR@/assets/icons/diagnostics/cloudflare.png"
+PNG_DIAGNOSTIC_GITHUB RCDATA "@CMAKE_CURRENT_SOURCE_DIR@/assets/icons/diagnostics/github.png"
+
+#include <winver.h>
+
+1 VERSIONINFO
+ FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "JAKETEA"
+            VALUE "FileDescription", "ZAPRET LAUNCHER"
+            VALUE "FileVersion", "@PROJECT_VERSION@.0"
+            VALUE "InternalName", "ZapretLauncher"
+            VALUE "OriginalFilename", "ZapretLauncher.exe"
+            VALUE "ProductName", "ZAPRET LAUNCHER"
+            VALUE "ProductVersion", "@PROJECT_VERSION@.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

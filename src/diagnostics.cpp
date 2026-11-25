@@ -4,19 +4,24 @@
 #include "utils.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cwctype>
 #include <future>
 
 namespace diagnostics {
 namespace {
 
-Result CheckSite(const char* name, const wchar_t* url) {
+Result CheckSite(Service service) {
     DWORD status = 0;
     std::string error;
-    if (!http::ProbeHttps(url, status, error)) return {name, Level::Error, error};
+    const auto start = std::chrono::steady_clock::now();
+    if (!http::ProbeHttps(service.url, status, error)) return {service.name, Level::Error, error};
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
     const bool available = status >= 200 && status < 400;
-    return {name, available ? Level::Good : Level::Error,
-            "TLS установлен · HTTP " + std::to_string(status)};
+    return {service.name, available ? Level::Good : Level::Error,
+            "TLS установлен · HTTP " + std::to_string(status),
+            available ? std::optional<long long>{elapsed} : std::nullopt};
 }
 
 std::wstring Lower(std::wstring text) {
@@ -96,10 +101,14 @@ std::vector<Result> CheckSystem() {
 }
 
 Report Run() {
-    auto discord = std::async(std::launch::async, CheckSite, "Discord", L"https://discord.com/");
-    auto youtube = std::async(std::launch::async, CheckSite, "YouTube", L"https://www.youtube.com/");
-    auto cloudflare = std::async(std::launch::async, CheckSite, "Cloudflare", L"https://www.cloudflare.com/cdn-cgi/trace");
-    auto github = std::async(std::launch::async, CheckSite, "GitHub", L"https://github.com/");
-    return {{discord.get(), youtube.get(), cloudflare.get(), github.get()}, CheckSystem()};
+    std::vector<std::future<Result>> requests;
+    for (auto service : kServices)
+        requests.push_back(std::async(std::launch::async, CheckSite, service));
+
+    Report report;
+    report.system = CheckSystem();
+    for (auto& request : requests)
+        report.network.push_back(request.get());
+    return report;
 }
 }

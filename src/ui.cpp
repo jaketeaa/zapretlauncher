@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "app_version.h"
 #include "utils.h"
 #include "installation.h"
 #include "glass_renderer.h"
@@ -13,6 +14,8 @@
 #include <imgui_internal.h>
 #include <algorithm>
 #include <cfloat>
+#include <iterator>
+#include <string_view>
 
 namespace fs = std::filesystem;
 
@@ -227,6 +230,7 @@ ImFont* g_fontButton = nullptr;
 ImFont* g_fontCaption = nullptr;
 const GlassRenderer* g_glass = nullptr;
 ImTextureID g_launcherIcon = 0;
+ImTextureID g_diagnosticIcons[std::size(diagnostics::kServices)]{};
 
 float S(float v) { return v * g_scale; }
 ImVec4 C(int r, int g, int b, float a = 1.0f) { return {r / 255.f, g / 255.f, b / 255.f, a}; }
@@ -580,11 +584,28 @@ void DrawTitleBar(HWND hwnd, const ImVec2& pos, const ImVec2& size) {
     const float height = S(kTitleBarH);
     draw->AddRectFilled(pos, {pos.x + size.x, pos.y + S(kTitleBarH + kNavH)}, Ink(WithAlpha(kTitleBg, 0.77f)));
     const char* title = "ZAPRET LAUNCHER";
+    constexpr auto version = LAUNCHER_VERSION_LABEL;
+    if (g_fontCaption) ImGui::PushFont(g_fontCaption);
+    const auto badgeText = ImGui::CalcTextSize(version);
+    if (g_fontCaption) ImGui::PopFont();
+    const float badgeWidth = badgeText.x + S(20);
+    const float badgeHeight = S(25);
+    const float gap = S(12);
     if (g_fontTitle) ImGui::PushFont(g_fontTitle);
     const auto text = ImGui::CalcTextSize(title);
-    const float x = pos.x + (size.x - text.x) / 2;
+    const float x = pos.x + (size.x - text.x - gap - badgeWidth) * 0.5f;
     draw->AddText({x, pos.y + (height - text.y) / 2}, Ink(kText), title);
     if (g_fontTitle) ImGui::PopFont();
+
+    const ImVec2 badge(x + text.x + gap, pos.y + (height - badgeHeight) * 0.5f);
+    const ImVec2 end(badge.x + badgeWidth, badge.y + badgeHeight);
+    draw->AddRectFilled(badge, end, Ink(C(42, 39, 34, .83f)), badgeHeight * .5f);
+    draw->AddRect(badge, end, Ink(C(255, 208, 128, .18f)), badgeHeight * .5f);
+    draw->AddLine({badge.x + S(11), badge.y + S(1.5f)}, {end.x - S(11), badge.y + S(1.5f)},
+                  Ink(C(255, 235, 199, .09f)), S(1));
+    if (g_fontCaption) ImGui::PushFont(g_fontCaption);
+    draw->AddText({badge.x + S(10), badge.y + (badgeHeight - badgeText.y) * .5f}, Ink(kAccentL), version);
+    if (g_fontCaption) ImGui::PopFont();
 
     auto caption = [&](const char* id, float right, bool close) {
         const ImVec2 p(pos.x + size.x - S(right), pos.y + S(7));
@@ -913,11 +934,11 @@ void DrawTerminal(AppState& s) {
 //  Вкладка «Диагностика»
 // =====================================================================
 void DrawDiagnostics(AppState& s) {
-    const bool busy = s.diagnosticJob.valid();
-    ImGui::BeginDisabled(busy);
+    ImGui::BeginDisabled(s.diagnosticJob.valid());
     if (Button("Проверить сеть и систему", {S(218), S(36)}, Action::Primary))
         s.diagnosticJob = std::async(std::launch::async, diagnostics::Run);
     ImGui::EndDisabled();
+    const bool busy = s.diagnosticJob.valid();
     if (busy) {
         ImGui::SameLine();
         ImGui::TextColored(kMuted, "Выполняется проверка...");
@@ -934,7 +955,56 @@ void DrawDiagnostics(AppState& s) {
     const float column = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2;
     BeginCard("##network_card", {column, 0}, ImGuiWindowFlags_None);
     Section("Доступность сервисов");
-    draw(s.diagnosticReport.network);
+    for (size_t i = 0; i < std::size(diagnostics::kServices); ++i) {
+        const auto& service = diagnostics::kServices[i];
+        const auto* result = !busy && i < s.diagnosticReport.network.size()
+            ? &s.diagnosticReport.network[i] : nullptr;
+        const auto origin = ImGui::GetCursorScreenPos();
+        const float width = ImGui::GetContentRegionAvail().x;
+        const float row = S(28);
+        auto* list = ImGui::GetWindowDrawList();
+        const float y = origin.y + (row - ImGui::GetFontSize()) * .5f;
+        const bool available = result && result->level == diagnostics::Level::Good;
+        const auto statusColor = result ? (available ? kGreen : kRed) : kMuted;
+        if (g_diagnosticIcons[i]) {
+            const ImVec2 icon(origin.x, origin.y + S(1));
+            list->AddImage(g_diagnosticIcons[i], icon, {icon.x + S(26), icon.y + S(26)},
+                           {0, 0}, {1, 1}, Ink(C(255, 255, 255)));
+            if (std::string_view(service.name) == "YouTube") {
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::InvisibleButton("##open_service", {S(26), row}))
+                    ShellExecuteW(nullptr, L"open", service.url, nullptr, nullptr, SW_SHOWNORMAL);
+                Tooltip("Открыть YouTube в браузере");
+                ImGui::PopID();
+                ImGui::SetCursorScreenPos(origin);
+            }
+        }
+        list->AddText({origin.x + S(34), y}, Ink(kText), service.name);
+
+        const std::string value = busy ? "..." : result && result->latencyMs
+            ? std::to_string(*result->latencyMs) + " ms" : "—";
+        ImVec4 valueColor = kMuted;
+        if (busy) {
+            valueColor = WithAlpha(kAccentL, .68f + .28f *
+                static_cast<float>(std::sin(ImGui::GetTime() * 4.0 - i * .35)));
+        } else if (result && result->latencyMs) {
+            const auto ms = *result->latencyMs;
+            valueColor = ms <= 50 ? C(48, 209, 88) : ms <= 100 ? C(255, 176, 32) :
+                         ms <= 200 ? C(255, 138, 53) : C(255, 69, 58);
+        }
+        const float latencyX = origin.x + width - S(82);
+        const char* status = result ? (available ? "Доступен" : "Недоступен") : (busy ? "Проверка" : "Не проверен");
+        const float statusX = latencyX - S(12) - ImGui::CalcTextSize(status).x;
+        list->AddCircleFilled({statusX - S(8), origin.y + row * .5f}, S(2.5f), Ink(statusColor));
+        list->AddText({statusX, y}, Ink(statusColor), status);
+        ImGui::Dummy({width - S(82), row});
+        ImGui::SameLine(0, 0);
+        ImGui::Dummy({S(82), row});
+        list->AddText({origin.x + width - ImGui::CalcTextSize(value.c_str()).x, y}, Ink(valueColor), value.c_str());
+        Tooltip("Время HTTPS-запроса WinHTTP до получения заголовков ответа. "
+                "Включает установление соединения и ожидание ответа сервера. Это не ICMP ping.");
+        if (result) WrappedColored(kMuted, result->detail);
+    }
     ImGui::EndChild();
     ImGui::SameLine();
     BeginCard("##system_card", {0, 0}, ImGuiWindowFlags_None);
@@ -1181,13 +1251,38 @@ void DrawSettings(AppState& s, HWND hwnd) {
     ImGui::BeginGroup();
     const auto spacing = ImGui::GetStyle().ItemSpacing;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {spacing.x, S(3)});
-    Section("ZAPRET LAUNCHER");
+    Section("ZAPRET LAUNCHER  " LAUNCHER_VERSION_LABEL);
     ImGui::TextColored(kAccentL, "%s", "Сделано JAKETEA");
     Label("Графический лаунчер для управления zapret.");
     Label("Использует zapret-discord-youtube от Flowseal.");
     ImGui::PopStyleVar();
     ImGui::EndGroup();
     ImGui::EndChild();
+
+    const auto p = ImGui::GetCursorScreenPos();
+    const ImVec2 size(ImGui::GetContentRegionAvail().x, S(40));
+    const ImVec2 end(p.x + size.x, p.y + size.y);
+    auto* banner = ImGui::GetWindowDrawList();
+    const float glow = .14f + .04f * static_cast<float>(std::sin(ImGui::GetTime() * 1.57));
+    banner->AddRectFilled(p, end, Ink(C(32, 29, 27, .75f)), S(13));
+    banner->AddRect(p, end, Ink(C(255, 176, 32, glow)), S(13));
+    const char* message = "Скоро будет новая версия...";
+    const auto text = ImGui::CalcTextSize(message);
+    const ImVec2 mark(p.x + (size.x - text.x - S(24)) * .5f + S(7), p.y + size.y * .5f);
+    const auto sparkle = [&](ImVec2 center, float radius) {
+        const float r = S(radius), t = r * .28f;
+        const ImVec2 points[] = {
+            {center.x, center.y - r}, {center.x + t, center.y - t},
+            {center.x + r, center.y}, {center.x + t, center.y + t},
+            {center.x, center.y + r}, {center.x - t, center.y + t},
+            {center.x - r, center.y}, {center.x - t, center.y - t}
+        };
+        banner->AddConcavePolyFilled(points, IM_ARRAYSIZE(points), Ink(kAccentL));
+    };
+    sparkle(mark, 6);
+    sparkle({mark.x + S(8), mark.y - S(6)}, 3);
+    banner->AddText({mark.x + S(17), p.y + (size.y - text.y) * .5f}, Ink(kAccentL), message);
+    ImGui::Dummy(size);
 }
 
 // =====================================================================
@@ -1266,6 +1361,9 @@ void ui::SetFonts(ImFont* title, ImFont* heading, ImFont* button, ImFont* captio
 
 void ui::SetGlassRenderer(const GlassRenderer* renderer) { g_glass = renderer; }
 void ui::SetLauncherIcon(unsigned long long texture) { g_launcherIcon = texture; }
+void ui::SetDiagnosticIcon(std::size_t index, unsigned long long texture) {
+    if (index < std::size(g_diagnosticIcons)) g_diagnosticIcons[index] = texture;
+}
 
 
 float ui::TitleBarHeightPx() { return S(kTitleBarH); }

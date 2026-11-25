@@ -10,7 +10,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include "glass_renderer.h"
+#include "app_version.h"
 #include "font_resources.h"
 
 #include "imgui.h"
@@ -55,6 +57,11 @@ IDXGISwapChain* g_swap = nullptr;
 ID3D11RenderTargetView* g_rtv = nullptr;
 GlassRenderer g_glass;
 Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> g_launcherIcon;
+constexpr int kDiagnosticIconResources[] = {
+    PNG_DIAGNOSTIC_DISCORD, PNG_DIAGNOSTIC_YOUTUBE, PNG_DIAGNOSTIC_CLOUDFLARE, PNG_DIAGNOSTIC_GITHUB
+};
+static_assert(std::size(kDiagnosticIconResources) == std::size(diagnostics::kServices));
+Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> g_diagnosticIcons[std::size(kDiagnosticIconResources)];
 
 // ---------------- DirectX 11 ----------------
 void CreateRenderTarget() {
@@ -95,10 +102,10 @@ bool CreateDevice(HWND hwnd) {
     return true;
 }
 
-bool LoadLauncherTexture(HINSTANCE instance) {
+bool LoadPngTexture(HINSTANCE instance, int id, UINT size,
+                    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>& view) {
     using Microsoft::WRL::ComPtr;
-    constexpr UINT size = 256;
-    const auto resource = FindResourceW(instance, MAKEINTRESOURCEW(PNG_ZAPRET_LAUNCHER), RT_RCDATA);
+    const auto resource = FindResourceW(instance, MAKEINTRESOURCEW(id), RT_RCDATA);
     if (!resource) return false;
     const DWORD length = SizeofResource(instance, resource);
     const auto loaded = LoadResource(instance, resource);
@@ -131,8 +138,10 @@ bool LoadLauncherTexture(HINSTANCE instance) {
     if (FAILED(rgba->CopyPixels(nullptr, size * 4, static_cast<UINT>(pixels.size()), pixels.data()))) return false;
 
     // Keep transparent texels close to the dark rim for straight-alpha mip filtering.
-    for (size_t i = 0; i < pixels.size(); i += 4) {
-        if (!pixels[i + 3]) { pixels[i] = 41; pixels[i + 1] = 39; pixels[i + 2] = 40; }
+    if (id == PNG_ZAPRET_LAUNCHER) {
+        for (size_t i = 0; i < pixels.size(); i += 4) {
+            if (!pixels[i + 3]) { pixels[i] = 41; pixels[i + 1] = 39; pixels[i + 2] = 40; }
+        }
     }
     D3D11_TEXTURE2D_DESC desc{};
     desc.Width = desc.Height = size;
@@ -142,16 +151,19 @@ bool LoadLauncherTexture(HINSTANCE instance) {
     desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
     ComPtr<ID3D11Texture2D> texture;
     if (FAILED(g_device->CreateTexture2D(&desc, nullptr, &texture)) ||
-        FAILED(g_device->CreateShaderResourceView(texture.Get(), nullptr, &g_launcherIcon))) return false;
+        FAILED(g_device->CreateShaderResourceView(texture.Get(), nullptr, &view))) return false;
     g_ctx->UpdateSubresource(texture.Get(), 0, nullptr, pixels.data(), size * 4, 0);
-    g_ctx->GenerateMips(g_launcherIcon.Get());
-    ui::SetLauncherIcon(reinterpret_cast<uintptr_t>(g_launcherIcon.Get()));
+    g_ctx->GenerateMips(view.Get());
     return true;
 }
 
 void CleanupDevice() {
     ui::SetLauncherIcon(0);
     g_launcherIcon.Reset();
+    for (size_t i = 0; i < std::size(g_diagnosticIcons); ++i) {
+        ui::SetDiagnosticIcon(i, 0);
+        g_diagnosticIcons[i].Reset();
+    }
     CleanupRenderTarget();
     g_glass = {};
     if (g_swap)   { g_swap->Release();   g_swap = nullptr; }
@@ -426,7 +438,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     wc.lpszClassName = kWndClass;
     RegisterClassExW(&wc);
 
-    g_hwnd = CreateWindowExW(0, kWndClass, L"Zapret Launcher", WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX,
+    g_hwnd = CreateWindowExW(0, kWndClass, LAUNCHER_WINDOW_TITLE, WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX,
                              x, y, width, height,
                              nullptr, nullptr, hInst, nullptr);
     if (!g_hwnd) {
@@ -442,11 +454,16 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         return 1;
     }
 
-    if (!LoadLauncherTexture(hInst)) {
+    if (!LoadPngTexture(hInst, PNG_ZAPRET_LAUNCHER, 256, g_launcherIcon)) {
         CleanupDevice();
         MessageBoxW(g_hwnd, L"Не удалось загрузить встроенную иконку.", L"Zapret Launcher", MB_ICONERROR);
         DestroyWindow(g_hwnd);
         return 1;
+    }
+    ui::SetLauncherIcon(reinterpret_cast<uintptr_t>(g_launcherIcon.Get()));
+    for (size_t i = 0; i < std::size(g_diagnosticIcons); ++i) {
+        if (LoadPngTexture(hInst, kDiagnosticIconResources[i], 128, g_diagnosticIcons[i]))
+            ui::SetDiagnosticIcon(i, reinterpret_cast<uintptr_t>(g_diagnosticIcons[i].Get()));
     }
     TrayAdd(g_hwnd);
 

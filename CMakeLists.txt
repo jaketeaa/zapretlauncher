@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(ZapretLauncher LANGUAGES CXX RC)
+project(ZapretLauncher VERSION 1.0.2 LANGUAGES CXX RC)
 
 if(NOT MSVC)
     message(FATAL_ERROR "Проект собирается только компилятором MSVC (Visual Studio / Build Tools).")
@@ -54,6 +54,7 @@ target_link_libraries(imgui PUBLIC d3d11 dxgi d3dcompiler)
 
 # ---------- Само приложение ----------
 configure_file(src/fonts.rc.in fonts.rc @ONLY)
+configure_file(src/app_version.h.in app_version.h @ONLY)
 add_executable(ZapretLauncher WIN32
     ${CMAKE_CURRENT_BINARY_DIR}/fonts.rc
     src/glass_renderer.cpp
@@ -72,7 +73,7 @@ add_executable(ZapretLauncher WIN32
     app.manifest
 )
 
-target_include_directories(ZapretLauncher PRIVATE src)
+target_include_directories(ZapretLauncher PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}")
 target_compile_definitions(ZapretLauncher PRIVATE
     UNICODE _UNICODE NOMINMAX _CRT_SECURE_NO_WARNINGS
     WINVER=0x0A00 _WIN32_WINNT=0x0A00)
