@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="obsidian" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#303037"/>
+      <stop offset="1" stop-color="#111114"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6b6051"/>
+      <stop offset=".45" stop-color="#3a383e"/>
+      <stop offset="1" stop-color="#25252a"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffda7a"/>
+      <stop offset=".43" stop-color="#ffb020"/>
+      <stop offset="1" stop-color="#ed8e14"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#edge)" d="M 61,8 L 195,8 Q 248,8 248,61 L 248,195 Q 248,248 195,248 L 61,248 Q 8,248 8,195 L 8,61 Q 8,8 61,8 Z"/>
+  <path fill="url(#obsidian)" d="M 61,13 L 195,13 Q 243,13 243,61 L 243,195 Q 243,243 195,243 L 61,243 Q 13,243 13,195 L 13,61 Q 13,13 61,13 Z"/>
+  <path fill="url(#amber)" d="M 77,67 L 199,67 L 199,94 L 110,160 L 190,160 L 174,189 L 57,189 L 57,161 L 145,96 L 61,96 Z"/>
+</svg>
