@@ -277,6 +277,12 @@ ZapretInfo QueryZapret(const fs::path& directory) {
                 pathReadable = true;
                 path.resize(length);
                 result.processRunning = SameExecutable(path, result.executable);
+                if (result.processRunning && result.sameDirectory && result.service.state == SERVICE_RUNNING) {
+                    FILETIME creation{}, exit{}, kernel{}, user{};
+                    if (GetProcessTimes(process, &creation, &exit, &kernel, &user))
+                        result.processCreated = (static_cast<unsigned long long>(creation.dwHighDateTime) << 32) |
+                                                creation.dwLowDateTime;
+                }
             }
             CloseHandle(process);
         }

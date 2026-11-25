@@ -1,4 +1,4 @@
-#include "ui.h"
+#include "ui_widgets.h"
 #include "app_version.h"
 #include "utils.h"
 #include "installation.h"
@@ -31,6 +31,7 @@ AppState::AppState()
 void AppState::SetNotice(const std::string& msg, bool isError) {
     notice = msg;
     noticeError = isError;
+    notifications.Add(isError ? beta::Kind::Error : beta::Kind::Info, "ZAPRET LAUNCHER", msg);
 }
 
 void AppState::SaveConfig() {
@@ -45,6 +46,10 @@ void AppState::RefreshFiles() {
     missing = updater.MissingFiles();
     if (!updater.Installing()) localVersion = updater.LocalTag();
     svcStatus = ServiceManager::ReadStatus(config.ZapretDir());
+    uptime.Observe(svcStatus.state == SERVICE_RUNNING,
+        !svcStatus.queryError || svcStatus.queryError == ERROR_SERVICE_DOES_NOT_EXIST,
+        svcStatus.processCreated);
+    UpdateUptime(beta::Clock::now());
 
     // Выбранный general*.bat должен существовать в списке
     std::string& sel = config.settings.selectedBat;
@@ -65,9 +70,11 @@ void AppState::Init() {
     runWithWindows = util::IsAutostartEnabled();
     RefreshFiles();
     updater.Start(GithubUpdater::Task::Check);
+    if (config.settings.checkLauncherOnStart) CheckLauncher();
 }
 
 void AppState::Tick() {
+    TickBeta();
     if (autostartJob.valid() && autostartJob.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         auto failure = autostartJob.get();
         if (!failure.empty()) {
@@ -75,13 +82,7 @@ void AppState::Tick() {
             SetNotice(failure, true);
         }
     }
-    if (diagnosticJob.valid() && diagnosticJob.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-        try {
-            diagnosticReport = diagnosticJob.get();
-        } catch (const std::exception& e) {
-            SetNotice(std::string("Ошибка диагностики: ") + e.what(), true);
-        }
-    }
+
     if (Deleting()) {
         if (removalJob.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
         std::string error;
@@ -215,11 +216,11 @@ void AppState::StartTerminal() {
 // =====================================================================
 //  Тема и вспомогательные функции
 // =====================================================================
-namespace {
+namespace ui_detail {
 
 constexpr float kTitleBarH = 52.0f;
 constexpr float kNavH = 56.0f;
-constexpr float kCaptionButtonsWidth = 101.0f;
+constexpr float kCaptionButtonsWidth = 147.0f;
 constexpr auto kNoScroll = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 
 float g_scale = 1.0f;
@@ -228,12 +229,13 @@ ImFont* g_fontHeading = nullptr;
 ImFont* g_fontMono = nullptr;
 ImFont* g_fontButton = nullptr;
 ImFont* g_fontCaption = nullptr;
+ImFont* g_fontUptime = nullptr;
 const GlassRenderer* g_glass = nullptr;
 ImTextureID g_launcherIcon = 0;
 ImTextureID g_diagnosticIcons[std::size(diagnostics::kServices)]{};
 
 float S(float v) { return v * g_scale; }
-ImVec4 C(int r, int g, int b, float a = 1.0f) { return {r / 255.f, g / 255.f, b / 255.f, a}; }
+ImVec4 C(int r, int g, int b, float a) { return {r / 255.f, g / 255.f, b / 255.f, a}; }
 
 const ImVec4 kBackground = C(12, 12, 14);
 const ImVec4 kTitleBg = C(16, 16, 18);
@@ -275,7 +277,7 @@ struct Motion {
 
 std::unordered_map<ImGuiID, Motion> g_motion;
 
-float Animate(ImGuiID id, float target, float initial, float seconds = 0.13f) {
+float Animate(ImGuiID id, float target, float initial, float seconds) {
     const int frame = ImGui::GetFrameCount();
     auto& motion = g_motion.try_emplace(id, Motion{initial, target, initial, 0, -1}).first->second;
     if (motion.to != target) {
@@ -306,7 +308,7 @@ ImVec4 WithAlpha(ImVec4 color, float alpha) {
 }
 
 void Glass(ImDrawList* draw, ImVec2 a, ImVec2 b, float radius, ImVec4 tint,
-           float hover, float warmth = 0, float glow = 0) {
+           float hover, float warmth, float glow) {
     if (!g_glass || !g_glass->DrawGlass(draw, a, b, radius, g_scale, Ink(tint), hover, warmth, glow))
         draw->AddRectFilled(a, b, Ink(tint), radius);
 }
@@ -386,7 +388,7 @@ void Section(const char* text) {
     if (g_fontHeading) ImGui::PopFont();
 }
 
-void BeginCard(const char* id, ImVec2 size, ImGuiWindowFlags flags = kNoScroll) {
+void BeginCard(const char* id, ImVec2 size, ImGuiWindowFlags flags) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {S(16), S(16)});
     ImGui::BeginChild(id, size, ImGuiChildFlags_AlwaysUseWindowPadding, flags);
     ImGui::PopStyleVar();
@@ -407,11 +409,12 @@ void StatusDot(const ImVec4& color, const char* text) {
     ImGui::TextUnformatted(text);
 }
 
-enum class Action { Neutral, Primary, Danger, Quiet };
 
-bool Button(const char* label, ImVec2 size = {}, Action action = Action::Neutral) {
+
+bool Button(const char* label, ImVec2 size, Action action) {
     if (g_fontButton) ImGui::PushFont(g_fontButton);
-    const auto text = ImGui::CalcTextSize(label);
+    const auto* labelEnd = ImGui::FindRenderedTextEnd(label);
+    const auto text = ImGui::CalcTextSize(label, labelEnd);
     const auto padding = ImGui::GetStyle().FramePadding;
     if (size.x == 0) size.x = text.x + 2 * padding.x;
     if (size.x < 0) size.x = ImGui::GetContentRegionAvail().x;
@@ -432,7 +435,10 @@ bool Button(const char* label, ImVec2 size = {}, Action action = Action::Neutral
     else draw->AddRectFilled(a, b, Ink(fill), S(12));
     if (ImGui::IsItemFocused() && ImGui::GetIO().NavVisible) draw->AddRect(a, b, Ink(kAccentL), S(12), 0, S(1.5f));
     const auto ink = primary ? C(33, 29, 12) : action == Action::Danger ? C(255, 158, 152) : kText;
-    draw->AddText({p.x + (size.x - text.x) / 2, p.y + (size.y - text.y) / 2}, Ink(Mix(ink, kMuted, motion.disabled)), label);
+    draw->PushClipRect(p, q, true);
+    draw->AddText({p.x + (size.x - text.x) / 2, p.y + (size.y - text.y) / 2},
+                  Ink(Mix(ink, kMuted, motion.disabled)), label, labelEnd);
+    draw->PopClipRect();
     if (g_fontButton) ImGui::PopFont();
     return pressed;
 }
@@ -457,7 +463,7 @@ bool Toggle(const char* label, bool value) {
     return pressed;
 }
 
-int Segments(const char* id, const char* const* labels, int count, int selected, ImVec2 size, bool navigation = false) {
+int Segments(const char* id, const char* const* labels, int count, int selected, ImVec2 size, bool navigation) {
     ImGui::PushID(id);
     if (g_fontButton) ImGui::PushFont(g_fontButton);
     const auto p = ImGui::GetCursorScreenPos();
@@ -579,34 +585,39 @@ bool DrawUpdateBanner(AppState& s) {
 // =====================================================================
 //  Кастомная шапка окна
 // =====================================================================
-void DrawTitleBar(HWND hwnd, const ImVec2& pos, const ImVec2& size) {
+void DrawTitleBar(AppState& s, HWND hwnd, const ImVec2& pos, const ImVec2& size) {
     auto* draw = ImGui::GetWindowDrawList();
     const float height = S(kTitleBarH);
     draw->AddRectFilled(pos, {pos.x + size.x, pos.y + S(kTitleBarH + kNavH)}, Ink(WithAlpha(kTitleBg, 0.77f)));
     const char* title = "ZAPRET LAUNCHER";
     constexpr auto version = LAUNCHER_VERSION_LABEL;
     if (g_fontCaption) ImGui::PushFont(g_fontCaption);
-    const auto badgeText = ImGui::CalcTextSize(version);
+    const auto versionText = ImGui::CalcTextSize(version);
+    const auto badgeText = ImGui::CalcTextSize("BETA");
     if (g_fontCaption) ImGui::PopFont();
     const float badgeWidth = badgeText.x + S(20);
     const float badgeHeight = S(25);
     const float gap = S(12);
     if (g_fontTitle) ImGui::PushFont(g_fontTitle);
     const auto text = ImGui::CalcTextSize(title);
-    const float x = pos.x + (size.x - text.x - gap - badgeWidth) * 0.5f;
+    const float x = pos.x + (size.x - text.x - gap * 2 - versionText.x - badgeWidth) * 0.5f;
     draw->AddText({x, pos.y + (height - text.y) / 2}, Ink(kText), title);
     if (g_fontTitle) ImGui::PopFont();
 
-    const ImVec2 badge(x + text.x + gap, pos.y + (height - badgeHeight) * 0.5f);
+    if (g_fontCaption) ImGui::PushFont(g_fontCaption);
+    draw->AddText({x + text.x + gap, pos.y + (height - versionText.y) * .5f}, Ink(kMuted), version);
+    if (g_fontCaption) ImGui::PopFont();
+    const ImVec2 badge(x + text.x + gap * 2 + versionText.x, pos.y + (height - badgeHeight) * 0.5f);
     const ImVec2 end(badge.x + badgeWidth, badge.y + badgeHeight);
     draw->AddRectFilled(badge, end, Ink(C(42, 39, 34, .83f)), badgeHeight * .5f);
     draw->AddRect(badge, end, Ink(C(255, 208, 128, .18f)), badgeHeight * .5f);
     draw->AddLine({badge.x + S(11), badge.y + S(1.5f)}, {end.x - S(11), badge.y + S(1.5f)},
                   Ink(C(255, 235, 199, .09f)), S(1));
     if (g_fontCaption) ImGui::PushFont(g_fontCaption);
-    draw->AddText({badge.x + S(10), badge.y + (badgeHeight - badgeText.y) * .5f}, Ink(kAccentL), version);
+    draw->AddText({badge.x + S(10), badge.y + (badgeHeight - badgeText.y) * .5f}, Ink(kAccentL), "BETA");
     if (g_fontCaption) ImGui::PopFont();
 
+    DrawNotificationBell(s, {pos.x + size.x - S(141), pos.y + S(7)});
     auto caption = [&](const char* id, float right, bool close) {
         const ImVec2 p(pos.x + size.x - S(right), pos.y + S(7));
         ImGui::SetCursorScreenPos(p);
@@ -619,7 +630,7 @@ void DrawTitleBar(HWND hwnd, const ImVec2& pos, const ImVec2& size) {
         draw->AddLine({center.x - d, center.y - (close ? d : 0)},
                       {center.x + d, center.y + (close ? d : 0)}, Ink(kText), S(1.8f));
         if (close) draw->AddLine({center.x - d, center.y + d}, {center.x + d, center.y - d}, Ink(kText), S(1.8f));
-        Tooltip(close ? "Свернуть в трей" : "Свернуть в панель задач");
+        Tooltip(close ? (s.config.settings.closeToTray ? "Свернуть в трей" : "Закрыть лаунчер") : "Свернуть в панель задач");
         return clicked;
     };
     if (caption("##caption_min", 93, false)) PostMessageW(hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
@@ -632,24 +643,26 @@ bool ServiceBusy(const AppState& s) {
 
 void DrawDashboard(AppState& s) {
     const auto& status = s.svcStatus;
-    const bool localService = status.installed && status.usesDirectory;
+    const bool localService = s.OwnService();
     const bool running = status.state == SERVICE_RUNNING;
     const bool pending = status.state == SERVICE_START_PENDING || status.state == SERVICE_STOP_PENDING ||
                          status.queryError == ERROR_SERVICE_MARKED_FOR_DELETE;
     const bool busy = ServiceBusy(s);
-    const bool canInstall = status.serviceBatPresent && !busy && !pending && !s.config.settings.selectedBat.empty();
+    const bool canInstall = status.serviceBatPresent && !busy && !pending && !s.config.settings.selectedBat.empty() &&
+        (!status.installed || (status.supported && s.CanControl())) &&
+        (!status.queryError || status.queryError == ERROR_SERVICE_DOES_NOT_EXIST);
 
     const bool working = pending || s.svcMgr.Busy() || s.updater.Installing();
     const float left = S(371);
-    BeginCard("##status_card", {left, S(385)});
+    BeginCard("##status_card", {left, S(395)});
     const float contentWidth = ImGui::GetContentRegionAvail().x;
     Label("СЛУЖБА ZAPRET");
     const float size = S(146);
     const auto origin = ImGui::GetCursorScreenPos();
-    ImGui::SetCursorScreenPos({origin.x + (contentWidth - size) / 2, origin.y + S(33)});
+    ImGui::SetCursorScreenPos({origin.x + (contentWidth - size) / 2, origin.y + S(22)});
 
     const bool installFiles = !localService && !s.missing.empty();
-    ImGui::BeginDisabled(installFiles ? FilesBusy(s) : busy || pending || (!localService && !canInstall));
+    ImGui::BeginDisabled(installFiles ? FilesBusy(s) : busy || pending || (localService ? !s.CanControl() : !canInstall));
     const auto powerId = ImGui::GetID("##power");
     const bool pressed = ImGui::InvisibleButton("##power", {size, size}, ImGuiButtonFlags_EnableNav);
     const auto p = ImGui::GetItemRectMin();
@@ -682,8 +695,8 @@ void DrawDashboard(AppState& s) {
 
     if (pressed) {
         if (installFiles) s.updater.Start(GithubUpdater::Task::Install);
-        else if (localService) s.svcMgr.SetRunning(!running);
-        else s.svcMgr.InstallStrategy(s.config.settings.selectedBat);
+        else if (localService) s.ToggleService();
+        else s.ApplyStrategy(s.config.settings.selectedBat);
     }
 
     ImGui::Spacing();
@@ -706,6 +719,7 @@ void DrawDashboard(AppState& s) {
     StatusDot(working ? kWarn : Mix(kRed, kGreen, charge), detail.c_str());
     ImGui::PopTextWrapPos();
     if (g_fontCaption) ImGui::PopFont();
+    DrawUptime(s, left);
     ImGui::EndChild();
 
     ImGui::SameLine();
@@ -717,13 +731,11 @@ void DrawDashboard(AppState& s) {
     Section("Стратегия");
     WrappedColored(kMuted, "Активная стратегия  ·  " + (status.strategy.empty() ? std::string("не определена") : status.strategy));
     ImGui::BeginDisabled(busy || pending || !status.serviceBatPresent);
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ComboStr("##bat", s.config.settings.selectedBat, s.strategies, false, "Нет файлов general*.bat"))
-        s.SaveConfig();
+    DrawStrategyPicker(s);
     ImGui::EndDisabled();
     ImGui::BeginDisabled(!canInstall);
     if (Button(status.installed ? "Сменить стратегию" : "Установить службу", {S(182), S(36)}))
-        s.svcMgr.InstallStrategy(s.config.settings.selectedBat);
+        s.ApplyStrategy(s.config.settings.selectedBat);
     ImGui::EndDisabled();
     ImGui::SameLine();
     static fs::path confirmedPath;
@@ -936,13 +948,11 @@ void DrawTerminal(AppState& s) {
 void DrawDiagnostics(AppState& s) {
     ImGui::BeginDisabled(s.diagnosticJob.valid());
     if (Button("Проверить сеть и систему", {S(218), S(36)}, Action::Primary))
-        s.diagnosticJob = std::async(std::launch::async, diagnostics::Run);
+        s.StartDiagnostics(true);
     ImGui::EndDisabled();
     const bool busy = s.diagnosticJob.valid();
-    if (busy) {
-        ImGui::SameLine();
-        ImGui::TextColored(kMuted, "Выполняется проверка...");
-    }
+    DrawMonitoringControls(s);
+    if (busy) ImGui::TextColored(kMuted, "Выполняется проверка...");
 
     auto draw = [](const std::vector<diagnostics::Result>& results) {
         using diagnostics::Level;
@@ -953,7 +963,7 @@ void DrawDiagnostics(AppState& s) {
         }
     };
     const float column = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2;
-    BeginCard("##network_card", {column, 0}, ImGuiWindowFlags_None);
+    BeginCard("##network_card", {column, S(360)}, ImGuiWindowFlags_None);
     Section("Доступность сервисов");
     for (size_t i = 0; i < std::size(diagnostics::kServices); ++i) {
         const auto& service = diagnostics::kServices[i];
@@ -1007,9 +1017,14 @@ void DrawDiagnostics(AppState& s) {
     }
     ImGui::EndChild();
     ImGui::SameLine();
-    BeginCard("##system_card", {0, 0}, ImGuiWindowFlags_None);
+    DrawConnectionHistory(s);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {S(16), S(16)});
+    ImGui::BeginChild("##system_card", {}, ImGuiChildFlags_AlwaysUseWindowPadding |
+                      ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize);
+    ImGui::PopStyleVar();
     Section("Службы, драйверы и DNS");
-    draw(s.diagnosticReport.system);
+    if (s.diagnosticReport.system.empty()) Label("Запустите разовую проверку сети и системы.");
+    else draw(s.diagnosticReport.system);
     ImGui::EndChild();
 }
 
@@ -1097,7 +1112,7 @@ void DrawLists(AppState& s) {
 //  Вкладка "Настройки"
 // =====================================================================
 enum class SettingsIcon { Folder, Download, System, Repository };
-constexpr wchar_t kLauncherRepository[] = L"https://github.com/jaketeaa/zapretlauncher";
+const std::wstring kLauncherRepository = launcher_updates::Repository();
 
 void SettingsHeading(SettingsIcon icon, const char* title) {
     const auto p = ImGui::GetCursorScreenPos();
@@ -1177,7 +1192,7 @@ void DrawSettings(AppState& s, HWND hwnd) {
     ImGui::EndChild();
 
     const float column = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2;
-    BeginCard("##startup_card", {column, S(119)});
+    BeginCard("##startup_card", {column, S(182)});
     SettingsHeading(SettingsIcon::System, "Запуск и выход");
     ImGui::BeginDisabled(s.autostartJob.valid());
     if (Toggle("Запускать вместе с Windows", s.runWithWindows)) {
@@ -1201,10 +1216,19 @@ void DrawSettings(AppState& s, HWND hwnd) {
     ImGui::SameLine();
     if (Button("Выход из программы", {S(171), S(34)}, Action::Danger))
         PostMessageW(hwnd, WM_APP_EXIT, 0, 0);
+    auto& prefs = s.config.settings;
+    if (Toggle("Сворачивать при закрытии окна", prefs.closeToTray)) {
+        prefs.closeToTray = !prefs.closeToTray;
+        s.SaveConfig();
+    }
+    if (Toggle("Открывать в трее при автозапуске", prefs.launchHidden)) {
+        prefs.launchHidden = !prefs.launchHidden;
+        s.SaveConfig();
+    }
     ImGui::EndChild();
 
     ImGui::SameLine();
-    BeginCard("##uninstall_card", {0, S(119)});
+    BeginCard("##uninstall_card", {0, S(182)});
     Section("Управление установкой");
     ImGui::BeginDisabled(s.Deleting() || s.updater.Busy() || s.svcMgr.Busy() || !s.managedInstallation);
     if (Button("Удалить zapret", {S(194), S(32)}, Action::Danger)) ImGui::OpenPopup("Удаление zapret");
@@ -1231,19 +1255,21 @@ void DrawSettings(AppState& s, HWND hwnd) {
     }
     ImGui::EndChild();
 
-    BeginCard("##about_card", {0, S(150)});
+    DrawLauncherUpdates(s, hwnd);
+    DrawBackupTools(s, hwnd);
+    BeginCard("##about_card", {0, S(156)});
     SettingsHeading(SettingsIcon::Repository, "О проекте");
     ImGui::SameLine(ImGui::GetWindowWidth() - S(232));
-    ImGui::BeginDisabled(!kLauncherRepository[0]);
+    ImGui::BeginDisabled(kLauncherRepository.empty());
     if (Button("Репозиторий проекта", {S(216), S(32)}))
-        ShellExecuteW(hwnd, L"open", kLauncherRepository, nullptr, nullptr, SW_SHOWNORMAL);
+        ShellExecuteW(hwnd, L"open", kLauncherRepository.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     const auto buttonMin = ImGui::GetItemRectMin(), buttonMax = ImGui::GetItemRectMax();
     const ImVec2 arrow(buttonMax.x - S(15), (buttonMin.y + buttonMax.y) * 0.5f);
     auto* draw = ImGui::GetWindowDrawList();
     draw->AddLine({arrow.x - S(4), arrow.y + S(4)}, {arrow.x + S(3), arrow.y - S(3)}, Ink(kMuted), S(1.2f));
     draw->AddLine({arrow.x - S(2), arrow.y - S(3)}, {arrow.x + S(3), arrow.y - S(3)}, Ink(kMuted), S(1.2f));
     draw->AddLine({arrow.x + S(3), arrow.y - S(3)}, {arrow.x + S(3), arrow.y + S(2)}, Ink(kMuted), S(1.2f));
-    Tooltip(kLauncherRepository[0] ? "Открыть репозиторий лаунчера в браузере" :
+    Tooltip(!kLauncherRepository.empty() ? "Открыть репозиторий лаунчера в браузере" :
                                     "Публичная ссылка на репозиторий лаунчера не задана");
     ImGui::EndDisabled();
     ImGui::Image(g_launcherIcon, {S(56), S(56)});
@@ -1251,7 +1277,7 @@ void DrawSettings(AppState& s, HWND hwnd) {
     ImGui::BeginGroup();
     const auto spacing = ImGui::GetStyle().ItemSpacing;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {spacing.x, S(3)});
-    Section("ZAPRET LAUNCHER  " LAUNCHER_VERSION_LABEL);
+    Section("ZAPRET LAUNCHER  ·  Версия " LAUNCHER_VERSION " BETA");
     ImGui::TextColored(kAccentL, "%s", "Сделано JAKETEA");
     Label("Графический лаунчер для управления zapret.");
     Label("Использует zapret-discord-youtube от Flowseal.");
@@ -1259,30 +1285,7 @@ void DrawSettings(AppState& s, HWND hwnd) {
     ImGui::EndGroup();
     ImGui::EndChild();
 
-    const auto p = ImGui::GetCursorScreenPos();
-    const ImVec2 size(ImGui::GetContentRegionAvail().x, S(40));
-    const ImVec2 end(p.x + size.x, p.y + size.y);
-    auto* banner = ImGui::GetWindowDrawList();
-    const float glow = .14f + .04f * static_cast<float>(std::sin(ImGui::GetTime() * 1.57));
-    banner->AddRectFilled(p, end, Ink(C(32, 29, 27, .75f)), S(13));
-    banner->AddRect(p, end, Ink(C(255, 176, 32, glow)), S(13));
-    const char* message = "Скоро будет новая версия...";
-    const auto text = ImGui::CalcTextSize(message);
-    const ImVec2 mark(p.x + (size.x - text.x - S(24)) * .5f + S(7), p.y + size.y * .5f);
-    const auto sparkle = [&](ImVec2 center, float radius) {
-        const float r = S(radius), t = r * .28f;
-        const ImVec2 points[] = {
-            {center.x, center.y - r}, {center.x + t, center.y - t},
-            {center.x + r, center.y}, {center.x + t, center.y + t},
-            {center.x, center.y + r}, {center.x - t, center.y + t},
-            {center.x - r, center.y}, {center.x - t, center.y - t}
-        };
-        banner->AddConcavePolyFilled(points, IM_ARRAYSIZE(points), Ink(kAccentL));
-    };
-    sparkle(mark, 6);
-    sparkle({mark.x + S(8), mark.y - S(6)}, 3);
-    banner->AddText({mark.x + S(17), p.y + (size.y - text.y) * .5f}, Ink(kAccentL), message);
-    ImGui::Dummy(size);
+    DrawBetaNote();
 }
 
 // =====================================================================
@@ -1345,7 +1348,9 @@ void DrawLogPanel(AppState& s) {
     ImGui::PopStyleVar(3);
 }
 
-} // namespace
+} // namespace ui_detail
+
+using namespace ui_detail;
 
 // =====================================================================
 //  Публичный интерфейс
@@ -1359,6 +1364,7 @@ void ui::SetFonts(ImFont* title, ImFont* heading, ImFont* button, ImFont* captio
     g_fontMono = mono;
 }
 
+void ui::SetUptimeFont(ImFont* font) { g_fontUptime = font; }
 void ui::SetGlassRenderer(const GlassRenderer* renderer) { g_glass = renderer; }
 void ui::SetLauncherIcon(unsigned long long texture) { g_launcherIcon = texture; }
 void ui::SetDiagnosticIcon(std::size_t index, unsigned long long texture) {
@@ -1445,7 +1451,7 @@ void ui::Render(AppState& s, HWND hwnd) {
         if (g_glass && g_glass->Backdrop())
             ImGui::GetWindowDrawList()->AddImage(reinterpret_cast<ImTextureID>(g_glass->Backdrop()), viewport->Pos,
                 {viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y});
-        DrawTitleBar(hwnd, viewport->Pos, viewport->Size);
+        DrawTitleBar(s, hwnd, viewport->Pos, viewport->Size);
         auto* draw = ImGui::GetWindowDrawList();
         const float navBottom = viewport->Pos.y + S(kTitleBarH + kNavH) - 1;
         draw->AddLine({viewport->Pos.x, navBottom}, {viewport->Pos.x + viewport->Size.x, navBottom}, Ink(kDivider));
@@ -1455,6 +1461,11 @@ void ui::Render(AppState& s, HWND hwnd) {
         ImGui::SetCursorPos({(viewport->Size.x - navWidth) / 2, S(kTitleBarH + 10)});
         const int next = Segments("##navigation", pages, 5, page, {navWidth, S(39)}, true);
         static float fadeTime = 0.15f;
+        if (s.showDiagnosis) {
+            s.showDiagnosis = false;
+            page = 2;
+            fadeTime = 0;
+        }
         if (next >= 0 && next != page) {
             page = next;
             fadeTime = 0;
@@ -1495,9 +1506,10 @@ void ui::Render(AppState& s, HWND hwnd) {
         ImGui::PushID(page);
         ImGui::PushStyleColor(ImGuiCol_ChildBg, C(0, 0, 0, 0));
         ImGui::BeginChild("##page", {0, footer}, 0,
-                          page == 0 || page == 4 ? ImGuiWindowFlags_None : kNoScroll);
+                          page == 0 || page == 2 || page == 4 ? ImGuiWindowFlags_None : kNoScroll);
         ImGui::PopStyleColor();
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * (0.35f + 0.65f * EaseOut(fadeTime / 0.15f)));
+        ImGui::BeginDisabled(s.Restoring());
         if (s.Deleting() && (page == 0 || page == 1 || page == 3)) {
             Section("Удаление zapret…");
             ImGui::ProgressBar(-static_cast<float>(ImGui::GetTime()), {S(260), S(10)}, "");
@@ -1508,12 +1520,14 @@ void ui::Render(AppState& s, HWND hwnd) {
             case 3: DrawLists(s); break;
             case 4: DrawSettings(s, hwnd); break;
         }
+        ImGui::EndDisabled();
         ImGui::PopStyleVar();
         ImGui::EndChild();
         ImGui::PopID();
         if (!terminal) DrawLogPanel(s);
 
         ImGui::EndChild();
+        DrawToasts(s, terminal ? 0 : S(logSize));
         ImGui::GetForegroundDrawList()->AddRect({viewport->Pos.x + 0.5f, viewport->Pos.y + 0.5f},
             {viewport->Pos.x + viewport->Size.x - 0.5f, viewport->Pos.y + viewport->Size.y - 0.5f},
             Ink(C(255, 255, 255, 0.12f)), S(22));

@@ -1,4 +1,5 @@
 #include "http_client.h"
+#include "app_version.h"
 #include <winhttp.h>
 #include <cwchar>
 #include <vector>
@@ -8,7 +9,7 @@
 namespace http {
 
 namespace {
-const wchar_t* kUserAgent = L"ZapretLauncher/2.0 (Windows; WinHTTP)";
+const wchar_t* kUserAgent = L"ZapretLauncher/" LAUNCHER_AGENT_VERSION_W L" (Windows; WinHTTP)";
 
 struct Handle {
     HINTERNET h = nullptr;

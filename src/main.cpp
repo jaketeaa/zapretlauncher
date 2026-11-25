@@ -14,6 +14,7 @@
 #include "glass_renderer.h"
 #include "app_version.h"
 #include "font_resources.h"
+#include "tray_panel.h"
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -39,9 +40,9 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 namespace {
 
 constexpr UINT WM_TRAYICON = WM_APP + 1;
-constexpr UINT WM_APP_SHOW = WM_APP + 3;
-enum { ID_TRAY_OPEN = 1001, ID_TRAY_EXIT = 1003 };
-const wchar_t* kWndClass = L"ZapretLauncherWnd";
+
+bool g_trayV4 = false;
+const wchar_t* kWndClass = L"ZapretLauncherBetaWnd";
 
 AppState* g_app = nullptr;
 HWND g_hwnd = nullptr;
@@ -226,42 +227,72 @@ void SetWindowIcons(HWND hwnd, UINT dpi) {
     SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(LauncherIcon(true, dpi)));
 }
 
+std::wstring TrayTip() {
+    std::wstring tip = L"ZAPRET LAUNCHER";
+    if (!g_app) return tip;
+    tip += L"\nСлужба: " + util::FromUtf8(g_app->svcStatus.stateText);
+    const auto& strategy = g_app->svcStatus.strategy;
+    if (!strategy.empty()) {
+        auto display = util::FromUtf8(strategy);
+        if (display.size() > 45) {
+            display.resize(45);
+            if (display.back() >= 0xD800 && display.back() <= 0xDBFF) display.pop_back();
+            display += L"…";
+        }
+        tip += L"\nСтратегия: " + display;
+    }
+    tip += L"\nВремя работы: " + util::FromUtf8(g_app->uptimeText);
+    return tip;
+}
+
 void TrayAdd(HWND hwnd) {
     g_nid = {};
     g_nid.cbSize = sizeof(g_nid);
     g_nid.hWnd = hwnd;
     g_nid.uID = 1;
-    g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
     g_nid.uCallbackMessage = WM_TRAYICON;
     g_nid.hIcon = LauncherIcon(true);
-    wcscpy_s(g_nid.szTip, L"Zapret Launcher - остановлен");
-    Shell_NotifyIconW(NIM_ADD, &g_nid);
+    wcsncpy_s(g_nid.szTip, TrayTip().c_str(), _TRUNCATE);
+    if (Shell_NotifyIconW(NIM_ADD, &g_nid)) {
+        g_nid.uVersion = NOTIFYICON_VERSION_4;
+        g_trayV4 = Shell_NotifyIconW(NIM_SETVERSION, &g_nid) == TRUE;
+    } else g_trayV4 = false;
 }
 
-void TrayUpdateTip(bool running) {
-    wcscpy_s(g_nid.szTip, running ? L"Zapret Launcher - активен" : L"Zapret Launcher - остановлен");
-    g_nid.uFlags = NIF_TIP;
-    Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+void TrayUpdateTip() {
+    const auto tip = TrayTip();
+    wchar_t bounded[std::size(g_nid.szTip)]{};
+    wcsncpy_s(bounded, tip.c_str(), _TRUNCATE);
+    if (wcscmp(g_nid.szTip, bounded) == 0) return;
+    auto info = g_nid;
+    info.uFlags = NIF_TIP | NIF_SHOWTIP;
+    wcscpy_s(info.szTip, bounded);
+    if (Shell_NotifyIconW(NIM_MODIFY, &info)) wcscpy_s(g_nid.szTip, bounded);
 }
 
 void ShowMain() {
+    tray_panel::Dismiss();
     ShowWindow(g_hwnd, SW_SHOW);
     ShowWindow(g_hwnd, SW_RESTORE);
     SetForegroundWindow(g_hwnd);
 }
 
-void ShowTrayMenu(HWND hwnd) {
-    HMENU menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING, ID_TRAY_OPEN, L"Открыть");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT, L"Выход");
-    SetMenuDefaultItem(menu, ID_TRAY_OPEN, FALSE);
-    POINT pt;
-    GetCursorPos(&pt);
-    SetForegroundWindow(hwnd);
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, nullptr);
-    PostMessageW(hwnd, WM_NULL, 0, 0);
-    DestroyMenu(menu);
+void ShowTrayPanel(HWND hwnd, POINT point) {
+    if (!g_app) return;
+    RECT anchor{point.x, point.y, point.x + 1, point.y + 1};
+    NOTIFYICONIDENTIFIER id{};
+    id.cbSize = sizeof(id);
+    id.hWnd = hwnd;
+    id.uID = g_nid.uID;
+    RECT icon{};
+    if (SUCCEEDED(Shell_NotifyIconGetRect(&id, &icon)) &&
+        MonitorFromRect(&icon, MONITOR_DEFAULTTONEAREST) == MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST))
+        anchor = icon;
+    if (!tray_panel::Show(hwnd, *g_app, anchor)) {
+        g_app->SetNotice("Не удалось открыть окно трея.", true);
+        ShowMain();
+    }
 }
 
 // ---------------- Кастомная рамка окна ----------------
@@ -288,20 +319,26 @@ void LoadFonts(HINSTANCE instance) {
     io.Fonts->Clear();
     static const ImWchar ranges[] = {0x0020, 0x00FF, 0x0400, 0x052F, 0x2000, 0x206F, 0x20AC, 0x20AC,
                                     0x2116, 0x2116, 0x2190, 0x2193, 0x2500, 0x257F, 0};
-    auto load = [&](WORD id, float size) -> ImFont* {
+    auto load = [&](WORD id, float size, bool timer = false) -> ImFont* {
         const auto resource = FindResourceW(instance, MAKEINTRESOURCEW(id), RT_RCDATA);
         const auto data = resource ? LoadResource(instance, resource) : nullptr;
         void* bytes = data ? LockResource(data) : nullptr;
         if (!bytes) return nullptr;
         ImFontConfig options;
         options.FontDataOwnedByAtlas = false;
+        if (timer) {
+            options.OversampleH = 2;
+            options.OversampleV = 2;
+        }
+        const float pixels = timer ? std::round(size * g_scale) : size * g_scale;
         return io.Fonts->AddFontFromMemoryTTF(bytes, static_cast<int>(SizeofResource(instance, resource)),
-                                              size * g_scale, &options, ranges);
+                                              pixels, &options, ranges);
     };
     io.FontDefault = load(FONT_REGULAR, 16.0f);
     if (!io.FontDefault) io.FontDefault = io.Fonts->AddFontDefault();
     ui::SetFonts(load(FONT_BOLD, 27.0f), load(FONT_SEMIBOLD, 19.0f), load(FONT_SEMIBOLD, 16.0f),
                  load(FONT_MEDIUM, 14.0f), load(FONT_MONO, 14.0f));
+    ui::SetUptimeFont(load(FONT_MONO, 28.0f, true));
 }
 
 LRESULT HitTest(HWND hWnd, LPARAM lParam) {
@@ -321,6 +358,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
 
     if (g_taskbarCreated && msg == g_taskbarCreated) {   // Explorer перезапущен
+        tray_panel::Dismiss();
         TrayAdd(hWnd);
         return 0;
     }
@@ -365,7 +403,8 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             (wParam & 0xfff0) == SC_SIZE) return 0;
         break;
     case WM_CLOSE:
-        ShowWindow(hWnd, SW_HIDE);                       // крестик = свернуть в трей
+        if (g_app && g_app->config.settings.closeToTray) ShowWindow(hWnd, SW_HIDE);
+        else DestroyWindow(hWnd);
         return 0;
     case WM_APP_EXIT:
         DestroyWindow(hWnd);
@@ -373,21 +412,20 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_APP_SHOW:
         ShowMain();
         return 0;
-    case WM_TRAYICON:
-        if (lParam == WM_LBUTTONDBLCLK || lParam == WM_LBUTTONUP) ShowMain();
-        else if (lParam == WM_RBUTTONUP) ShowTrayMenu(hWnd);
-        return 0;
-    case WM_COMMAND:
-        switch (LOWORD(wParam)) {
-        case ID_TRAY_OPEN:
-            ShowMain();
-            break;
-        case ID_TRAY_EXIT:
-            DestroyWindow(hWnd);
-            break;
+    case WM_TRAYICON: {
+        const UINT event = g_trayV4 ? LOWORD(lParam) : static_cast<UINT>(lParam);
+        if (event == WM_LBUTTONDBLCLK || event == NIN_KEYSELECT || event == NIN_SELECT) ShowMain();
+        else if (event == WM_CONTEXTMENU || (!g_trayV4 && event == WM_RBUTTONUP)) {
+            POINT position{};
+            if (g_trayV4) position = {GET_X_LPARAM(wParam), GET_Y_LPARAM(wParam)};
+            else GetCursorPos(&position);
+            if (position.x == -1 && position.y == -1) GetCursorPos(&position);
+            ShowTrayPanel(hWnd, position);
         }
         return 0;
+    }
     case WM_DESTROY:
+        tray_panel::Shutdown();
         Shell_NotifyIconW(NIM_DELETE, &g_nid);
         PostQuitMessage(0);
         return 0;
@@ -399,7 +437,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     // Один экземпляр программы
-    HANDLE mutex = CreateMutexW(nullptr, TRUE, L"ZapretLauncher_SingleInstance_Mutex");
+    HANDLE mutex = CreateMutexW(nullptr, TRUE, L"ZapretLauncherBeta_SingleInstance_Mutex");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         HWND other = FindWindowW(kWndClass, nullptr);
         if (other) PostMessageW(other, WM_APP_SHOW, 0, 0);
@@ -490,33 +528,36 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     }
     g_imguiReady = IsWindow(g_hwnd) != FALSE;
     if (g_imguiReady) {
-        ShowWindow(g_hwnd, startHidden ? SW_HIDE : SW_SHOWDEFAULT);
+        ShowWindow(g_hwnd, startHidden && g_app && g_app->config.settings.launchHidden ? SW_HIDE : SW_SHOWDEFAULT);
         UpdateWindow(g_hwnd);
     }
 
-    bool lastRunning = false;
-    if (g_app && IsWindow(g_hwnd)) {
-        lastRunning = g_app->svcStatus.state == SERVICE_RUNNING;
-        TrayUpdateTip(lastRunning);
-    }
-
+    TrayUpdateTip();
+    auto nextTrayTip = beta::Clock::now();
     MSG msg{};
     while (msg.message != WM_QUIT) {
-        if (PeekMessageW(&msg, nullptr, 0U, 0U, PM_REMOVE)) {
+        // Bound each batch so a steady stream of mouse input cannot starve the timer.
+        for (int count = 0; count < 32 && PeekMessageW(&msg, nullptr, 0U, 0U, PM_REMOVE); ++count) {
+            if (msg.message == WM_QUIT) break;
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
-            continue;
         }
+        if (msg.message == WM_QUIT) break;
 
         g_app->Tick();
-        bool running = g_app->svcStatus.state == SERVICE_RUNNING;
-        if (running != lastRunning) {
-            lastRunning = running;
-            TrayUpdateTip(running);
+        tray_panel::RefreshUptime();
+        const auto now = beta::Clock::now();
+        if (now >= nextTrayTip) {
+            nextTrayTip = now + std::chrono::seconds(1);
+            TrayUpdateTip();
         }
 
         if (!IsWindowVisible(g_hwnd) || IsIconic(g_hwnd)) {
-            MsgWaitForMultipleObjects(0, nullptr, FALSE, 100, QS_ALLINPUT);   // окно скрыто - почти не грузим CPU
+            constexpr auto idle = std::chrono::milliseconds(100);
+            const auto deadline = std::min(g_app->nextUptime, now + idle);
+            const auto delay = std::chrono::ceil<std::chrono::milliseconds>(deadline - now).count();
+            MsgWaitForMultipleObjectsEx(0, nullptr, static_cast<DWORD>(std::max(0LL, delay)),
+                                        QS_ALLINPUT, MWMO_INPUTAVAILABLE);
             continue;
         }
 
@@ -525,6 +566,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 
     // Деструкторы завершают терминал и фоновые задачи.
     g_imguiReady = false;
+    tray_panel::Shutdown();
     delete g_app;
     g_app = nullptr;
 

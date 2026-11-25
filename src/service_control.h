@@ -19,6 +19,7 @@ struct ZapretInfo {
     bool supported = false;
     bool sameDirectory = false;
     bool processRunning = false;
+    unsigned long long processCreated = 0;
 };
 ZapretInfo QueryZapret(const std::filesystem::path& directory);
 bool RemoveZapretService(const std::filesystem::path& expected, std::string& error);

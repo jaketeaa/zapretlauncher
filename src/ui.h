@@ -5,6 +5,9 @@
 #include <vector>
 #include <future>
 #include "diagnostics.h"
+#include "beta_state.h"
+#include "launcher_updates.h"
+#include "settings_backup.h"
 
 #include "config_manager.h"
 #include "launcher_log.h"
@@ -17,6 +20,7 @@ class GlassRenderer;
 
 // Сообщение главному окну: полный выход из программы
 constexpr UINT WM_APP_EXIT = WM_APP + 2;
+constexpr UINT WM_APP_SHOW = WM_APP + 3;
 
 struct AppState {
     std::filesystem::path baseDir;      // ВАЖНО: объявлен первым (используется при инициализации ниже)
@@ -42,6 +46,24 @@ struct AppState {
 
     std::future<diagnostics::Report> diagnosticJob;
     diagnostics::Report diagnosticReport;
+    beta::Uptime uptime;
+    std::string uptimeText = "00:00:00";
+    beta::Clock::time_point nextUptime{};
+    beta::History history;
+    beta::Notifications notifications;
+    beta::Clock::time_point nextDiagnosis{};
+    std::future<launcher_updates::Result> launcherJob;
+    launcher_updates::Result launcherRelease;
+    beta::WallClock::time_point lastLauncherCheck{};
+    std::string snoozedTag;
+    beta::Clock::time_point remindAfter{};
+    unsigned notifiedService = 0, notifiedFlowseal = 0;
+    bool showDiagnosis = false;
+    enum class BackupAction { Read, Export, Restore };
+    BackupAction backupAction = BackupAction::Read;
+    std::future<settings_backup::Result> backupJob;
+    std::optional<settings_backup::Backup> backupPreview;
+    bool Restoring() const { return backupJob.valid() && backupAction == BackupAction::Restore; }
 
     // Редактор списков
     std::string selectedList, listBuffer, newListName;
@@ -73,6 +95,20 @@ struct AppState {
 
     AppState();
     void Init();
+    void StartDiagnostics(bool full);
+    void CheckLauncher();
+    void ChooseBackup(HWND owner, bool save);
+    void RestoreBackup();
+    Settings BackupSettings() const;
+    void TickBeta();
+    void UpdateUptime(beta::Clock::time_point now);
+    bool Favorite(const std::string& name) const;
+    void ToggleFavorite(const std::string& name);
+    bool PickStrategy(const std::string& name);
+    bool ApplyStrategy(const std::string& name);
+    bool OwnService() const;
+    bool CanControl() const;
+    void ToggleService();
     void Tick();                 // вызывать каждый кадр (даже когда окно скрыто)
 
     void ChooseDirectory(HWND owner);
@@ -87,6 +123,7 @@ struct AppState {
 namespace ui {
 void SetDpiScale(float scale);
 void SetFonts(ImFont* title, ImFont* heading, ImFont* button, ImFont* caption, ImFont* mono);
+void SetUptimeFont(ImFont* font);
 void SetGlassRenderer(const GlassRenderer* renderer);
 void SetLauncherIcon(unsigned long long texture);
 void SetDiagnosticIcon(std::size_t index, unsigned long long texture);

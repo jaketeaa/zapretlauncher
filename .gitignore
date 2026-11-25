@@ -2,3 +2,5 @@
 /zapret/
 /config.json
 /.vs/
+/config-beta.json*
+/beta-backups/

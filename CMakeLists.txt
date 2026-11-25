@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(ZapretLauncher VERSION 1.0.2 LANGUAGES CXX RC)
+project(ZapretLauncher VERSION 1.0.21 LANGUAGES CXX RC)
 
 if(NOT MSVC)
     message(FATAL_ERROR "Проект собирается только компилятором MSVC (Visual Studio / Build Tools).")
@@ -60,18 +60,26 @@ add_executable(ZapretLauncher WIN32
     src/glass_renderer.cpp
     src/installation.cpp
     src/main.cpp
+    src/tray_panel.cpp
     src/ui.cpp
+    src/ui_beta.cpp
     src/utils.cpp
     src/http_client.cpp
     src/config_manager.cpp
     src/launcher_log.cpp
     src/diagnostics.cpp
+    src/beta_state.cpp
+    src/beta_controller.cpp
+    src/launcher_updates.cpp
+    src/settings_backup.cpp
     src/github_updater.cpp
     src/service_control.cpp
     src/console_session.cpp
     src/service_manager.cpp
     app.manifest
 )
+
+set_target_properties(ZapretLauncher PROPERTIES OUTPUT_NAME "ZapretLauncher-${PROJECT_VERSION}-beta")
 
 target_include_directories(ZapretLauncher PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}")
 target_compile_definitions(ZapretLauncher PRIVATE
@@ -81,7 +89,7 @@ target_compile_options(ZapretLauncher PRIVATE /W3 /utf-8 /EHsc /permissive-)
 target_link_libraries(ZapretLauncher PRIVATE
     imgui
     nlohmann_json::nlohmann_json
-    winhttp shell32 advapi32 user32 ole32 dwmapi uuid gdi32 windowscodecs
+    winhttp shell32 advapi32 user32 ole32 dwmapi uuid gdi32 windowscodecs gdiplus shcore
 )
 
 target_link_options(ZapretLauncher PRIVATE /MANIFESTUAC:NO)

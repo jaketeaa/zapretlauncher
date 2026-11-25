@@ -23,6 +23,7 @@ struct ServiceStatus {
     std::string stateText = "Не установлена";
     std::string strategy;          // имя стратегии из реестра (без .bat)
     bool winwsRunning = false;
+    unsigned long long processCreated = 0;
 
     std::string gameMode = "disabled";   // disabled / all / tcp / udp
     std::string gameTcp = "1024-65535";
@@ -50,6 +51,7 @@ public:
     void InstallStrategy(const std::string& batName);
     void RemoveService(std::filesystem::path expected);
     void SetRunning(bool running);
+    void Restart();
     void UpdateIpset();
     void UpdateHosts();
     void SetGameFilter(const std::string& mode);   // disabled / all / tcp / udp

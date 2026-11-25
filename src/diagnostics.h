@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <optional>
 #include <string>
 #include <vector>
@@ -20,10 +21,12 @@ struct Result {
     Level level;
     std::string detail;
     std::optional<long long> latencyMs{};
+    std::chrono::system_clock::time_point measuredAt{};
+    std::chrono::steady_clock::time_point measuredTick{};
 };
 struct Report {
     std::vector<Result> network;
     std::vector<Result> system;
 };
-Report Run();
+Report Run(bool includeSystem);
 }

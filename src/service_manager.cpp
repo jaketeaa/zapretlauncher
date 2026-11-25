@@ -208,6 +208,7 @@ ServiceStatus ServiceManager::ReadStatus(const fs::path& z) {
     st.executable = snapshot.executable;
     st.supported = snapshot.supported;
     st.winwsRunning = snapshot.processRunning;
+    st.processCreated = snapshot.processCreated;
     if (st.installed) st.strategy = svc::ReadStrategyName();
 
     ParseGameFilter(z / L"utils" / L"game_filter.enabled", st);
@@ -510,9 +511,27 @@ void ServiceManager::InstallStrategy(const std::string& batName) {
 
 void ServiceManager::SetRunning(bool running) {
     Launch(running ? "Запуск службы zapret..." : "Остановка службы zapret...", [this, running] {
+        const auto status = svc::QueryZapret(zapret_);
+        if (!status.supported || !status.sameDirectory) {
+            Fail("Не удалось подтвердить службу из выбранной папки.");
+            return;
+        }
         const bool ok = running ? svc::Start(L"zapret", 20000) : svc::Stop(L"zapret", 20000);
         if (ok) Done(running ? "Служба zapret запущена." : "Служба zapret остановлена.");
         else Fail(running ? "Не удалось запустить службу zapret." : "Не удалось остановить службу zapret.");
+    });
+}
+
+void ServiceManager::Restart() {
+    Launch("Перезапуск службы zapret...", [this] {
+        const auto status = svc::QueryZapret(zapret_);
+        if (!status.supported || !status.sameDirectory || status.service.state != SERVICE_RUNNING) {
+            Fail("Не удалось подтвердить работающую службу из выбранной папки.");
+            return;
+        }
+        if (svc::Stop(L"zapret", 20000) && svc::Start(L"zapret", 20000))
+            Done("Служба zapret перезапущена.");
+        else Fail("Не удалось перезапустить службу zapret.");
     });
 }
 

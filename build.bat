@@ -2,14 +2,14 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 echo === Настройка проекта (скачивание ImGui и nlohmann/json) ===
-cmake -S . -B build -G "Visual Studio 18 2026" -A x64
+cmake -S . -B build/Beta -G "Visual Studio 18 2026" -A x64
 if errorlevel 1 goto fail
 echo === Сборка ===
-cmake --build build --config Release
+cmake --build build/Beta --config Release
 if errorlevel 1 goto fail
 echo.
-echo ГОТОВО: build\Release\ZapretLauncher.exe
-explorer build\Release
+echo ГОТОВО: build\Beta\Release
+explorer build\Beta\Release
 pause
 exit /b 0
 :fail

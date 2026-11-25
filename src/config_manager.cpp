@@ -23,7 +23,21 @@ fs::path ConfigManager::ZapretDir() const {
 bool ConfigManager::Load(std::string& error) {
     std::error_code ec;
     if (!fs::exists(ConfigPath(), ec)) {
-        settings = Settings{};
+        const auto stable = base_ / L"config.json";
+        std::string text;
+        if (fs::exists(stable, ec)) {
+            if (!ReadTextFile(stable, text, error)) return false;
+            try {
+                settings = json::parse(text).at("settings").get<Settings>();
+            } catch (const std::exception&) {
+                settings = Settings{};
+                error = "Не удалось прочитать стабильные настройки. Бета использует значения по умолчанию.";
+                return false;
+            }
+        } else if (ec) {
+            error = "Не удалось проверить наличие стабильного конфига.";
+            return false;
+        }
         return Save(error);
     }
     std::string text;
@@ -37,8 +51,8 @@ bool ConfigManager::Load(std::string& error) {
         bak += L".broken";
         fs::copy_file(ConfigPath(), bak, fs::copy_options::overwrite_existing, ec);
         settings = Settings{};
-        error = std::string("config.json повреждён (") + e.what() +
-                "). Загружены настройки по умолчанию, копия сохранена в config.json.broken";
+        error = std::string("config-beta.json повреждён (") + e.what() +
+                "). Загружены настройки по умолчанию, копия сохранена в config-beta.json.broken";
         return false;
     }
 }
@@ -53,10 +67,10 @@ bool ConfigManager::Save(std::string& error) {
         if (!WriteTextFile(temporary, text, error)) return false;
         if (MoveFileExW(temporary.c_str(), ConfigPath().c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
             return true;
-        error = "Не удалось заменить config.json (код " + std::to_string(GetLastError()) + ").";
+        error = "Не удалось заменить config-beta.json (код " + std::to_string(GetLastError()) + ").";
         return false;
     } catch (const std::exception& e) {
-        error = std::string("Ошибка сохранения config.json: ") + e.what();
+        error = std::string("Ошибка сохранения config-beta.json: ") + e.what();
         return false;
     }
 }

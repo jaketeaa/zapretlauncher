@@ -174,7 +174,7 @@ int RunCapture(const std::wstring& cmdLine, DWORD timeoutMs, std::string& outUtf
 }
 
 // ---------------- Автозапуск ----------------
-static const wchar_t* kTaskName = L"ZapretLauncher";
+static const wchar_t* kTaskName = L"ZapretLauncherBeta";
 
 static std::wstring XmlEscape(const std::wstring& s) {
     std::wstring r;
@@ -200,7 +200,7 @@ static std::wstring EnvVar(const wchar_t* name) {
 }
 
 bool IsAutostartEnabled() {
-    return RunHidden(L"schtasks.exe /Query /TN \"ZapretLauncher\"", 15000) == 0;
+    return RunHidden(L"schtasks.exe /Query /TN \"ZapretLauncherBeta\"", 15000) == 0;
 }
 
 bool SetAutostart(bool enable, std::string& error) {
@@ -212,7 +212,7 @@ bool SetAutostart(bool enable, std::string& error) {
     }
 
     if (!enable) {
-        int rc = RunHidden(L"schtasks.exe /Delete /TN \"ZapretLauncher\" /F", 15000);
+        int rc = RunHidden(L"schtasks.exe /Delete /TN \"ZapretLauncherBeta\" /F", 15000);
         if (rc != 0 && IsAutostartEnabled()) {
             error = "Не удалось удалить задачу автозапуска из Планировщика заданий.";
             return false;
@@ -244,7 +244,7 @@ bool SetAutostart(bool enable, std::string& error) {
 
     wchar_t tmp[MAX_PATH]{};
     GetTempPathW(MAX_PATH, tmp);
-    fs::path xmlPath = fs::path(tmp) / L"zapret_launcher_task.xml";
+    fs::path xmlPath = fs::path(tmp) / L"zapret_launcher_beta_task.xml";
     {
         std::ofstream f(xmlPath, std::ios::binary | std::ios::trunc);
         if (!f) { error = "Не удалось создать временный XML-файл задачи."; return false; }
@@ -252,7 +252,7 @@ bool SetAutostart(bool enable, std::string& error) {
         f.write(reinterpret_cast<const char*>(bom), 2);
         f.write(reinterpret_cast<const char*>(xml.data()), (std::streamsize)(xml.size() * sizeof(wchar_t)));
     }
-    int rc = RunHidden(L"schtasks.exe /Create /TN \"ZapretLauncher\" /XML \"" + xmlPath.wstring() + L"\" /F", 20000);
+    int rc = RunHidden(L"schtasks.exe /Create /TN \"ZapretLauncherBeta\" /XML \"" + xmlPath.wstring() + L"\" /F", 20000);
     std::error_code ec;
     fs::remove(xmlPath, ec);
     if (rc != 0) {

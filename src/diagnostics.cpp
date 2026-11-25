@@ -15,13 +15,14 @@ Result CheckSite(Service service) {
     DWORD status = 0;
     std::string error;
     const auto start = std::chrono::steady_clock::now();
-    if (!http::ProbeHttps(service.url, status, error)) return {service.name, Level::Error, error};
-    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - start).count();
-    const bool available = status >= 200 && status < 400;
+    const bool connected = http::ProbeHttps(service.url, status, error);
+    const auto finished = std::chrono::steady_clock::now();
+    const auto date = std::chrono::system_clock::now();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(finished - start).count();
+    const bool available = connected && status >= 200 && status < 400;
     return {service.name, available ? Level::Good : Level::Error,
-            "TLS установлен · HTTP " + std::to_string(status),
-            available ? std::optional<long long>{elapsed} : std::nullopt};
+            connected ? "TLS установлен · HTTP " + std::to_string(status) : error,
+            available ? std::optional<long long>{elapsed} : std::nullopt, date, finished};
 }
 
 std::wstring Lower(std::wstring text) {
@@ -100,13 +101,13 @@ std::vector<Result> CheckSystem() {
 }
 }
 
-Report Run() {
+Report Run(bool includeSystem) {
     std::vector<std::future<Result>> requests;
     for (auto service : kServices)
         requests.push_back(std::async(std::launch::async, CheckSite, service));
 
     Report report;
-    report.system = CheckSystem();
+    if (includeSystem) report.system = CheckSystem();
     for (auto& request : requests)
         report.network.push_back(request.get());
     return report;

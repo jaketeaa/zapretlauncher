@@ -29,9 +29,9 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         shell: pwsh
         run: |
-          $exe = Get-ChildItem -Path build -Filter ZapretLauncher.exe -Recurse |
+          $exe = Get-ChildItem -Path build/Release -Filter "ZapretLauncher*.exe" -File |
             Select-Object -First 1
           if (-not $exe) {
-            throw "ZapretLauncher.exe was not found in the build folder."
+            throw "The launcher EXE was not found in build/Release."
           }
           gh release upload $env:RELEASE_TAG "$($exe.FullName)" --clobber
